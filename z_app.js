@@ -54,6 +54,9 @@ function freq_weight(freq) {
    DRAW STACKED PITCH CLASSES
    ========================= */
 
+const PEAK_DECAY = 0.998
+let peak_data = new Float32Array(12)
+
 function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
     if(!pitch_lut || !freq_data) {
         return
@@ -66,6 +69,13 @@ function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
 
     const n_pc = 12
     const col_w = rect.width / n_pc
+
+    const LABEL_FONT_PX = 12
+    const LABEL_MARGIN_PX = 4
+    const PC_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
+
+    const label_area_h = LABEL_FONT_PX + LABEL_MARGIN_PX * 2
+    const usable_h = rect.height - label_area_h
 
     const stacks = Array.from({ length: n_pc }, () => [])
 
@@ -91,7 +101,8 @@ function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
     }
 
     for(let pc = 0; pc < n_pc; pc++) {
-        let y = rect.height
+        let y = usable_h
+        const y_start = y
         const col = stacks[pc]
 
         for(let octave = 0; octave < col.length; octave++) {
@@ -101,8 +112,8 @@ function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
             }
 
             const h = Math.min(
-                rect.height,
-                Math.sqrt(v) * rect.height * HEIGHT_SCALE
+                usable_h,
+                Math.sqrt(v) * usable_h * HEIGHT_SCALE
             )
 
             const alpha = Math.max(0.15, 1.0 - octave * 0.15)
@@ -116,8 +127,38 @@ function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
                 h
             )
         }
+
+        const total_h = Math.min(usable_h, y_start - y)
+
+        if(total_h > peak_data[pc]) {
+            peak_data[pc] = total_h
+        } else {
+            peak_data[pc] *= PEAK_DECAY
+        }
+
+        const peak_y = usable_h - peak_data[pc]
+
+        ctx.strokeStyle = "rgba(220,40,40,0.95)"
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(pc * col_w, peak_y)
+        ctx.lineTo(pc * col_w + col_w - 2, peak_y)
+        ctx.stroke()
+    }
+
+    ctx.font = `${LABEL_FONT_PX}px sans-serif`
+    ctx.textAlign = "center"
+    ctx.textBaseline = "middle"
+    ctx.fillStyle = "rgba(180,180,180,0.9)"
+
+    for(let pc = 0; pc < n_pc; pc++) {
+        const x = pc * col_w + col_w * 0.5
+        const y = usable_h + label_area_h * 0.5
+        ctx.fillText(PC_NAMES[pc], x, y)
     }
 }
+
+
 
 /* =========================
    AUDIO / FFT
@@ -134,7 +175,7 @@ async function start_mic_fft(draw_cb, set_pitch_lut) {
     const source = audio_ctx.createMediaStreamSource(stream)
 
     const analyser = audio_ctx.createAnalyser()
-    analyser.fftSize = 2048
+    analyser.fftSize = 4096 * 2
 
     source.connect(analyser)
 
