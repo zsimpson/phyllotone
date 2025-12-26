@@ -4,9 +4,12 @@ import { z } from './zscript.js'
    TUNABLE VISUAL CONSTANTS
    ========================= */
 
-const HEIGHT_SCALE = 1.5          // overall column height scaling
-const FREQ_WEIGHT_ALPHA = 0.8     // low-frequency boost (0.3–0.6 typical)
-const REF_FREQ = 261.625565       // C4 reference for weighting
+const HEIGHT_SCALE = 1.5
+const FREQ_WEIGHT_ALPHA = 0.8
+const REF_FREQ = 261.625565
+
+const HEAT_MAX = 1.0
+const WATERFALL_ROW_H = 1
 
 /* =========================
    PITCH LUT
@@ -51,21 +54,16 @@ function freq_weight(freq) {
 }
 
 /* =========================
-   DRAW STACKED PITCH CLASSES
+   WATERFALL HEAT MAP
    ========================= */
 
-const PEAK_DECAY = 0.998
-let peak_data = new Float32Array(12)
-
-function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
+function draw_pitch_class_waterfall(canvas_el, freq_data, pitch_lut) {
     if(!pitch_lut || !freq_data) {
         return
     }
 
     const ctx = canvas_el.getContext("2d")
     const rect = canvas_el.getBoundingClientRect()
-
-    ctx.clearRect(0, 0, rect.width, rect.height)
 
     const n_pc = 12
     const col_w = rect.width / n_pc
@@ -77,7 +75,27 @@ function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
     const label_area_h = LABEL_FONT_PX + LABEL_MARGIN_PX * 2
     const usable_h = rect.height - label_area_h
 
-    const stacks = Array.from({ length: n_pc }, () => [])
+    /* --- SCROLL UP BY 1 PIXEL USING IMAGE DATA --- */
+
+    const image_data = ctx.getImageData(
+        0,
+        0,
+        rect.width,
+        usable_h - WATERFALL_ROW_H
+    )
+
+    ctx.putImageData(image_data, 0, -WATERFALL_ROW_H)
+
+    /* clear bottom row */
+    ctx.clearRect(
+        0,
+        usable_h - WATERFALL_ROW_H,
+        rect.width,
+        WATERFALL_ROW_H
+    )
+
+    /* accumulate energy per pitch class */
+    const energy = new Float32Array(n_pc)
 
     for(let i = 0; i < freq_data.length; i++) {
         const lut = pitch_lut[i]
@@ -91,61 +109,31 @@ function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
         }
 
         const amp = amp_raw * freq_weight(lut.freq)
-
-        const { pc, octave } = lut
-        if(!stacks[pc][octave]) {
-            stacks[pc][octave] = 0
-        }
-
-        stacks[pc][octave] += amp
+        energy[lut.pc] += amp
     }
 
+    /* draw newest row at bottom */
     for(let pc = 0; pc < n_pc; pc++) {
-        let y = usable_h
-        const y_start = y
-        const col = stacks[pc]
+        const v = Math.min(
+            HEAT_MAX,
+            Math.sqrt(energy[pc]) * HEIGHT_SCALE
+        )
 
-        for(let octave = 0; octave < col.length; octave++) {
-            const v = col[octave]
-            if(!v) {
-                continue
-            }
+        const r = Math.min(255, v * 255)
+        const g = Math.min(255, v * 140)
+        const b = Math.min(255, v * 60)
 
-            const h = Math.min(
-                usable_h,
-                Math.sqrt(v) * usable_h * HEIGHT_SCALE
-            )
+        ctx.fillStyle = `rgb(${r},${g},${b})`
 
-            const alpha = Math.max(0.15, 1.0 - octave * 0.15)
-            ctx.fillStyle = `rgba(120,120,120,${alpha})`
-
-            y -= h
-            ctx.fillRect(
-                pc * col_w,
-                y,
-                col_w - 2,
-                h
-            )
-        }
-
-        const total_h = Math.min(usable_h, y_start - y)
-
-        if(total_h > peak_data[pc]) {
-            peak_data[pc] = total_h
-        } else {
-            peak_data[pc] *= PEAK_DECAY
-        }
-
-        const peak_y = usable_h - peak_data[pc]
-
-        ctx.strokeStyle = "rgba(220,40,40,0.95)"
-        ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(pc * col_w, peak_y)
-        ctx.lineTo(pc * col_w + col_w - 2, peak_y)
-        ctx.stroke()
+        ctx.fillRect(
+            pc * col_w,
+            usable_h - WATERFALL_ROW_H,
+            col_w - 1,
+            WATERFALL_ROW_H
+        )
     }
 
+    /* labels (static, redrawn every frame) */
     ctx.font = `${LABEL_FONT_PX}px sans-serif`
     ctx.textAlign = "center"
     ctx.textBaseline = "middle"
@@ -157,8 +145,6 @@ function draw_pitch_class_stacks(canvas_el, freq_data, pitch_lut) {
         ctx.fillText(PC_NAMES[pc], x, y)
     }
 }
-
-
 
 /* =========================
    AUDIO / FFT
@@ -226,7 +212,7 @@ export function z_app() {
                     return
                 }
 
-                draw_pitch_class_stacks(
+                draw_pitch_class_waterfall(
                     canvas_el,
                     freq_data,
                     pitch_lut
